@@ -1,0 +1,261 @@
+name: Build iOS Unsigned IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Build configuration'
+        required: false
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
+      node_version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      scheme:
+        description: 'Xcode scheme (leave empty for auto-detect)'
+        required: false
+        type: string
+      clean:
+        description: 'Clean build'
+        required: false
+        default: false
+        type: boolean
+
+# Static group: a second manual run queues behind the first instead of
+# overwriting it. github.run_id is unique per run, so it would give no
+# protection at all.
+concurrency:
+  group: ios-build-workflow
+  cancel-in-progress: false
+
+jobs:
+  build-ios:
+    name: Build Unsigned iOS IPA
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+
+      - name: Debug - Print environment info
+        run: |
+          echo "Node version: $(node --version)"
+          echo "npm version: $(npm --version)"
+          echo "Working directory: $(pwd)"
+          echo "Package manager: npm (detected from package-lock.json)"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify Expo CLI
+        run: |
+          npx expo --version
+          echo "Dependencies installed successfully"
+
+      - name: Run Expo prebuild for iOS
+        run: |
+          if [ "${{ inputs.clean }}" == "true" ]; then
+            npx expo prebuild --platform ios --clean
+          else
+            npx expo prebuild --platform ios
+          fi
+        env:
+          EXPO_NO_TELEMETRY: 1
+          CI: 1
+
+      - name: Verify prebuild success
+        run: |
+          if [ ! -d "ios" ]; then
+            echo "ERROR: expo prebuild did not create ios/ directory"
+            echo "Check prebuild logs above for errors"
+            exit 1
+          fi
+          if [ ! -f "ios/Podfile" ]; then
+            echo "ERROR: Podfile not found after prebuild"
+            exit 1
+          fi
+          echo "Prebuild verification passed"
+
+      - name: Debug - Verify iOS project generated
+        run: |
+          echo "Checking for ios/ directory..."
+          ls -la ios/
+          echo ""
+          echo "Looking for workspace and project files..."
+          find ios -name "*.xcworkspace" -o -name "*.xcodeproj" | head -5
+
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: ios/Pods
+          # First run: cache miss (Podfile.lock created by prebuild).
+          # Subsequent runs: cache hit keyed on Podfile.lock hash.
+          key: ${{ runner.os }}-pods-${{ hashFiles('ios/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pods-
+
+      - name: Install CocoaPods dependencies
+        working-directory: ios
+        run: |
+          pod install --repo-update
+          echo "CocoaPods installation complete"
+
+      - name: Debug - Verify CocoaPods setup
+        working-directory: ios
+        run: |
+          echo "Podfile.lock checksum:"
+          cat Podfile.lock | head -5
+          echo ""
+          echo "Installed pods:"
+          ls -la Pods/ | head -10
+
+      - name: Detect Xcode configuration
+        id: xcode-config
+        working-directory: ios
+        run: |
+          # Find workspace (preferred) or project file
+          WORKSPACE=$(find . -maxdepth 1 -name "*.xcworkspace" | head -1 | sed 's|^\./||')
+          PROJECT=$(find . -maxdepth 1 -name "*.xcodeproj" | head -1 | sed 's|^\./||')
+
+          # Scheme from input, else default to app name "tripX" from app.json
+          if [ -n "${{ inputs.scheme }}" ]; then
+            SCHEME="${{ inputs.scheme }}"
+          else
+            SCHEME="tripX"
+          fi
+
+          # Prefer workspace over project
+          if [ -n "$WORKSPACE" ]; then
+            BUILD_TARGET="-workspace $WORKSPACE"
+            echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
+            echo "Using workspace: $WORKSPACE"
+          elif [ -n "$PROJECT" ]; then
+            BUILD_TARGET="-project $PROJECT"
+            echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+            echo "Using project: $PROJECT"
+          else
+            echo "ERROR: No workspace or project found"
+            exit 1
+          fi
+
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+          echo "build_target=$BUILD_TARGET" >> "$GITHUB_OUTPUT"
+          echo "Detected scheme: $SCHEME"
+
+          # Validate scheme exists; fail fast with the available list
+          if [ -n "$WORKSPACE" ]; then
+            AVAILABLE_SCHEMES=$(xcodebuild -workspace "$WORKSPACE" -list | grep -A 100 "Schemes:" | tail -n +2 || echo "")
+          else
+            AVAILABLE_SCHEMES=$(xcodebuild -project "$PROJECT" -list | grep -A 100 "Schemes:" | tail -n +2 || echo "")
+          fi
+
+          if ! echo "$AVAILABLE_SCHEMES" | grep -q "$SCHEME"; then
+            echo "ERROR: Scheme '$SCHEME' not found in available schemes:"
+            echo "$AVAILABLE_SCHEMES"
+            echo ""
+            echo "Please specify the correct scheme via the workflow input."
+            exit 1
+          fi
+          echo "Scheme validation passed"
+
+      - name: Debug - Print Xcode configuration
+        run: |
+          echo "Workspace: ${{ steps.xcode-config.outputs.workspace }}"
+          echo "Project: ${{ steps.xcode-config.outputs.project }}"
+          echo "Scheme: ${{ steps.xcode-config.outputs.scheme }}"
+          echo "Build target: ${{ steps.xcode-config.outputs.build_target }}"
+
+      - name: Build and archive iOS app (unsigned)
+        working-directory: ios
+        run: |
+          ARCHIVE_PATH="$RUNNER_TEMP/tripX.xcarchive"
+
+          timeout 45m xcodebuild archive \
+            ${{ steps.xcode-config.outputs.build_target }} \
+            -scheme "${{ steps.xcode-config.outputs.scheme }}" \
+            -configuration "${{ inputs.profile }}" \
+            -archivePath "$ARCHIVE_PATH" \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$RUNNER_TEMP/xcodebuild.log"
+
+          echo "Archive created at: $ARCHIVE_PATH"
+          echo "archive_path=$ARCHIVE_PATH" >> "$GITHUB_ENV"
+
+      - name: Debug - Verify archive structure
+        run: |
+          echo "Archive contents:"
+          ls -la "${{ env.archive_path }}"
+          echo ""
+          echo "Applications in archive:"
+          ls -la "${{ env.archive_path }}/Products/Applications/"
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-logs-${{ github.run_number }}
+          path: ${{ runner.temp }}/xcodebuild.log
+          retention-days: 7
+
+      - name: Package IPA
+        run: |
+          ARCHIVE_PATH="${{ env.archive_path }}"
+          APP_PATH=$(find "$ARCHIVE_PATH/Products/Applications" -name "*.app" | head -1)
+          APP_NAME=$(basename "$APP_PATH")
+          IPA_PATH="$RUNNER_TEMP/tripX-unsigned.ipa"
+
+          echo "Found app: $APP_PATH"
+          echo "App name: $APP_NAME"
+
+          # Create Payload directory and copy .app into it
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -r "$APP_PATH" "$RUNNER_TEMP/Payload/"
+
+          # Zip Payload into a .ipa
+          cd "$RUNNER_TEMP"
+          zip -r "$IPA_PATH" Payload
+
+          echo "IPA created at: $IPA_PATH"
+          echo "ipa_path=$IPA_PATH" >> "$GITHUB_ENV"
+
+      - name: Debug - Verify IPA created
+        run: |
+          echo "IPA file info:"
+          ls -lh "${{ env.ipa_path }}"
+          echo ""
+          echo "IPA size: $(du -h ${{ env.ipa_path }} | cut -f1)"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tripX-unsigned-ipa-${{ github.run_number }}
+          path: ${{ env.ipa_path }}
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          echo "Build complete." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Artifact Details" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Name:** tripX-unsigned-ipa-${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Size:** $(du -h ${{ env.ipa_path }} | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Configuration:** ${{ inputs.profile }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Scheme:** ${{ steps.xcode-config.outputs.scheme }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The IPA is unsigned. Sign it locally before installing." >> "$GITHUB_STEP_SUMMARY"
