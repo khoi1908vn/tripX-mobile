@@ -64,6 +64,33 @@ jobs:
           npx expo --version
           echo "Dependencies installed successfully"
 
+      - name: Validate TypeScript
+        run: npm run type-check
+        continue-on-error: true
+
+      - name: Verify required assets
+        run: |
+          echo "Checking for required assets..."
+          MISSING_ASSETS=0
+
+          for asset in assets/icon.png assets/splash.png assets/adaptive-icon.png assets/favicon.png; do
+            if [ ! -f "$asset" ]; then
+              echo "❌ Missing: $asset"
+              MISSING_ASSETS=1
+            else
+              echo "✅ Found: $asset"
+            fi
+          done
+
+          if [ $MISSING_ASSETS -eq 1 ]; then
+            echo ""
+            echo "Generating missing assets..."
+            npm install --no-save canvas
+            node scripts/generate-assets.js
+          fi
+
+          echo "All required assets present"
+
       - name: Run Expo prebuild for iOS
         run: |
           if [ "${{ inputs.clean }}" == "true" ]; then
@@ -129,11 +156,11 @@ jobs:
           WORKSPACE=$(find . -maxdepth 1 -name "*.xcworkspace" | head -1 | sed 's|^\./||')
           PROJECT=$(find . -maxdepth 1 -name "*.xcodeproj" | head -1 | sed 's|^\./||')
 
-          # Scheme from input, else default to app name "tripX" from app.json
+          # Scheme from input, else default to slug "tripx-mobile" from app.json
           if [ -n "${{ inputs.scheme }}" ]; then
             SCHEME="${{ inputs.scheme }}"
           else
-            SCHEME="tripX"
+            SCHEME="tripxmobile"
           fi
 
           # Prefer workspace over project
@@ -182,7 +209,7 @@ jobs:
         run: |
           ARCHIVE_PATH="$RUNNER_TEMP/tripX.xcarchive"
 
-          timeout 45m xcodebuild archive \
+          timeout 50m xcodebuild archive \
             ${{ steps.xcode-config.outputs.build_target }} \
             -scheme "${{ steps.xcode-config.outputs.scheme }}" \
             -configuration "${{ inputs.profile }}" \
