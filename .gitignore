@@ -23,5 +23,5 @@ expo-env.d.ts
 .agents/
 .claude/
 .omc/
-*lock.json
+skills-lock.json
 docs/superpowers/
