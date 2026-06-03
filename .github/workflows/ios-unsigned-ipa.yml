@@ -160,7 +160,7 @@ jobs:
           if [ -n "${{ inputs.scheme }}" ]; then
             SCHEME="${{ inputs.scheme }}"
           else
-            SCHEME="tripX"
+            SCHEME="tripxmobile"
           fi
 
           # Prefer workspace over project
@@ -209,7 +209,7 @@ jobs:
         run: |
           ARCHIVE_PATH="$RUNNER_TEMP/tripX.xcarchive"
 
-          timeout 50m xcodebuild archive \
+          xcodebuild archive \
             ${{ steps.xcode-config.outputs.build_target }} \
             -scheme "${{ steps.xcode-config.outputs.scheme }}" \
             -configuration "${{ inputs.profile }}" \
