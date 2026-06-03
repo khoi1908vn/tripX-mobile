@@ -1,0 +1,28 @@
+@import "tailwindcss";
+@import "./css/sf.css";
+
+/* Platform Fonts */
+@media (platform: ios) {
+  * {
+    font-family: -apple-system, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
+  }
+}
+
+@media (platform: android) {
+  * {
+    font-family: "Roboto", system-ui, sans-serif;
+  }
+}
+
+@media (platform: web) {
+  * {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+}
+
+/* Base Styles */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}

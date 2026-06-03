@@ -1,0 +1,85 @@
+/**
+ * Apple Semantic Colors
+ * Using light-dark() for automatic theme switching + platformColor() for iOS native mapping
+ */
+
+@theme {
+  /* Backgrounds */
+  --color-sf-bg: light-dark(
+    oklch(100% 0 0),
+    oklch(0% 0 0)
+  );
+
+  --color-sf-bg-2: light-dark(
+    oklch(96% 0.005 240),
+    oklch(6% 0.005 240)
+  );
+
+  --color-sf-surface: light-dark(
+    oklch(99% 0.005 240),
+    oklch(11% 0.005 240)
+  );
+
+  /* Text */
+  --color-sf-text: light-dark(
+    oklch(0% 0 0),
+    oklch(100% 0 0)
+  );
+
+  --color-sf-text-2: light-dark(
+    oklch(40% 0.005 240),
+    oklch(60% 0.005 240)
+  );
+
+  --color-sf-text-3: light-dark(
+    oklch(50% 0.005 240),
+    oklch(50% 0.005 240)
+  );
+
+  /* Functional Accents */
+  --color-sf-blue: light-dark(
+    oklch(50% 0.15 250),
+    oklch(60% 0.15 250)
+  );
+
+  --color-sf-green: light-dark(
+    oklch(50% 0.13 145),
+    oklch(60% 0.13 145)
+  );
+
+  --color-sf-red: light-dark(
+    oklch(55% 0.18 25),
+    oklch(65% 0.18 25)
+  );
+
+  --color-sf-gray: light-dark(
+    oklch(60% 0.005 240),
+    oklch(45% 0.005 240)
+  );
+
+  /* Separator */
+  --color-sf-separator: light-dark(
+    oklch(85% 0.005 240 / 0.3),
+    oklch(25% 0.005 240 / 0.6)
+  );
+}
+
+/* iOS Platform Colors Override */
+@media (platform: ios) {
+  @theme {
+    --color-sf-bg: platformColor(systemBackground);
+    --color-sf-bg-2: platformColor(systemGroupedBackground);
+    --color-sf-surface: platformColor(secondarySystemGroupedBackground);
+
+    --color-sf-text: platformColor(label);
+    --color-sf-text-2: platformColor(secondaryLabel);
+    --color-sf-text-3: platformColor(tertiaryLabel);
+
+    --color-sf-blue: platformColor(systemBlue);
+    --color-sf-green: platformColor(systemGreen);
+    --color-sf-red: platformColor(systemRed);
+    --color-sf-gray: platformColor(systemGray);
+
+    --color-sf-separator: platformColor(separator);
+  }
+}
