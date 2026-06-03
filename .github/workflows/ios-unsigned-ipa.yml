@@ -160,7 +160,7 @@ jobs:
           if [ -n "${{ inputs.scheme }}" ]; then
             SCHEME="${{ inputs.scheme }}"
           else
-            SCHEME="tripX"
+            SCHEME="tripxmobile"
           fi
 
           # Prefer workspace over project
