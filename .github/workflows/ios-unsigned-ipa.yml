@@ -59,6 +59,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Check for peer dependency issues
+        run: |
+          echo "Checking for peer dependency warnings..."
+          npm ls --depth=0 2>&1 | tee peer-deps.log || true
+
+          if grep -i "UNMET PEER DEPENDENCY\|missing:" peer-deps.log; then
+            echo "❌ Peer dependency issues detected!"
+            echo "Run 'npm install' locally to resolve peer dependencies."
+            exit 1
+          fi
+
+          echo "✅ No peer dependency issues detected"
+
       - name: Verify Expo CLI
         run: |
           npx expo --version
