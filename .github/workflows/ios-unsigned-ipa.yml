@@ -14,7 +14,7 @@ on:
       node_version:
         description: 'Node.js version'
         required: false
-        default: '20'
+        default: '24'
         type: string
       scheme:
         description: 'Xcode scheme (leave empty for auto-detect)'
@@ -43,11 +43,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Start build timer
+        run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
           cache: 'npm'
+
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
 
       - name: Debug - Print environment info
         run: |
@@ -57,7 +69,16 @@ jobs:
           echo "Package manager: npm (detected from package-lock.json)"
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          NPM_START=$(date +%s)
+          if [ -d node_modules ]; then
+            echo "node_modules cache hit, verifying integrity"
+            npm ls --depth=0 > /dev/null 2>&1 && echo "Integrity verified" || npm ci
+          else
+            echo "node_modules cache miss, running npm ci"
+            npm ci
+          fi
+          echo "NPM_DURATION=$(($(date +%s) - NPM_START))" >> $GITHUB_ENV
 
       - name: Check for peer dependency issues
         run: |
@@ -104,13 +125,30 @@ jobs:
 
           echo "All required assets present"
 
+      - name: Cache Expo prebuild output
+        id: cache-expo-prebuild
+        uses: actions/cache@v4
+        with:
+          path: |
+            ios
+            !ios/Pods
+          key: ${{ runner.os }}-expo-ios-${{ hashFiles('app.json', 'package.json', 'metro.config.js') }}
+          restore-keys: |
+            ${{ runner.os }}-expo-ios-
+
       - name: Run Expo prebuild for iOS
         run: |
-          if [ "${{ inputs.clean }}" == "true" ]; then
-            npx expo prebuild --platform ios --clean
+          PREBUILD_START=$(date +%s)
+          if [ -d ios ] && [ "${{ inputs.clean }}" != "true" ]; then
+            echo "Expo prebuild cache hit, skipping prebuild"
           else
-            npx expo prebuild --platform ios
+            if [ "${{ inputs.clean }}" == "true" ]; then
+              npx expo prebuild --platform ios --clean
+            else
+              npx expo prebuild --platform ios
+            fi
           fi
+          echo "PREBUILD_DURATION=$(($(date +%s) - PREBUILD_START))" >> $GITHUB_ENV
         env:
           EXPO_NO_TELEMETRY: 1
           CI: 1
@@ -146,11 +184,28 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pods-
 
+      - name: Cache CocoaPods specs repo
+        id: cache-cocoapods-specs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cocoapods/repos
+          key: ${{ runner.os }}-cocoapods-specs-${{ hashFiles('ios/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cocoapods-specs-
+
       - name: Install CocoaPods dependencies
         working-directory: ios
         run: |
-          pod install --repo-update
+          PODS_START=$(date +%s)
+          if [ -d ~/.cocoapods/repos/trunk ]; then
+            echo "CocoaPods specs repo cache hit, skipping --repo-update"
+            pod install
+          else
+            echo "CocoaPods specs repo cache miss, performing --repo-update"
+            pod install --repo-update
+          fi
           echo "CocoaPods installation complete"
+          echo "PODS_DURATION=$(($(date +%s) - PODS_START))" >> $GITHUB_ENV
 
       - name: Debug - Verify CocoaPods setup
         working-directory: ios
@@ -173,7 +228,7 @@ jobs:
           if [ -n "${{ inputs.scheme }}" ]; then
             SCHEME="${{ inputs.scheme }}"
           else
-            SCHEME="tripxmobile"
+            SCHEME="tripX"
           fi
 
           # Prefer workspace over project
@@ -217,9 +272,19 @@ jobs:
           echo "Scheme: ${{ steps.xcode-config.outputs.scheme }}"
           echo "Build target: ${{ steps.xcode-config.outputs.build_target }}"
 
+      - name: Cache Xcode derived data
+        id: cache-xcode-derived
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData
+          key: ${{ runner.os }}-xcode-derived-${{ hashFiles('ios/Podfile.lock', 'package.json', 'app.json') }}
+          restore-keys: |
+            ${{ runner.os }}-xcode-derived-
+
       - name: Build and archive iOS app (unsigned)
         working-directory: ios
         run: |
+          XCODE_START=$(date +%s)
           ARCHIVE_PATH="$RUNNER_TEMP/tripX.xcarchive"
 
           xcodebuild archive \
@@ -228,6 +293,7 @@ jobs:
             -configuration "${{ inputs.profile }}" \
             -archivePath "$ARCHIVE_PATH" \
             -destination 'generic/platform=iOS' \
+            -derivedDataPath ~/Library/Developer/Xcode/DerivedData \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
@@ -235,6 +301,7 @@ jobs:
 
           echo "Archive created at: $ARCHIVE_PATH"
           echo "archive_path=$ARCHIVE_PATH" >> "$GITHUB_ENV"
+          echo "XCODE_DURATION=$(($(date +%s) - XCODE_START))" >> $GITHUB_ENV
 
       - name: Debug - Verify archive structure
         run: |
@@ -289,8 +356,30 @@ jobs:
           if-no-files-found: error
 
       - name: Summary
+        if: always()
         run: |
-          echo "Build complete." >> "$GITHUB_STEP_SUMMARY"
+          BUILD_DURATION=$(($(date +%s) - BUILD_START))
+          BUILD_MIN=$((BUILD_DURATION / 60))
+          BUILD_SEC=$((BUILD_DURATION % 60))
+
+          echo "## Build Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### ⏱️ Build Timing" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Step | Duration |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|----------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| npm install | ${NPM_DURATION:-N/A}s |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Expo prebuild | ${PREBUILD_DURATION:-N/A}s |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CocoaPods install | ${PODS_DURATION:-N/A}s |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Xcode build | ${XCODE_DURATION:-N/A}s |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Total build** | **${BUILD_MIN}m ${BUILD_SEC}s** |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### 📦 Cache Status" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Cache | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| node_modules | ${{ steps.cache-node-modules.outputs.cache-hit == 'true' && '✅ Hit' || '❌ Miss' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Expo prebuild | ${{ steps.cache-expo-prebuild.outputs.cache-hit == 'true' && '✅ Hit' || '❌ Miss' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CocoaPods specs | ${{ steps.cache-cocoapods-specs.outputs.cache-hit == 'true' && '✅ Hit' || '❌ Miss' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Xcode derived data | ${{ steps.cache-xcode-derived.outputs.cache-hit == 'true' && '✅ Hit' || '❌ Miss' }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Artifact Details" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Name:** tripX-unsigned-ipa-${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
