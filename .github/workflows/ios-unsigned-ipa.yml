@@ -383,7 +383,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Artifact Details" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Name:** tripX-unsigned-ipa-${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Size:** $(du -h ${{ env.ipa_path }} | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Size:** $(du -h ${{ env.ipa_path }})" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Configuration:** ${{ inputs.profile }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Scheme:** ${{ steps.xcode-config.outputs.scheme }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
