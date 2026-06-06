@@ -125,6 +125,28 @@ jobs:
 
           echo "All required assets present"
 
+      # ccache caches compiled C++/ObjC object files across runs. RN 0.76's
+      # react_native_post_install wires CC/LD/CXX -> ccache wrappers when
+      # USE_CCACHE=1 is set during `pod install`. Reliable hit (small dir),
+      # unlike Xcode DerivedData. No-op + warning if ccache binary missing.
+      - name: Setup ccache
+        run: |
+          brew list ccache >/dev/null 2>&1 || brew install ccache
+          echo "CCACHE_DIR=$HOME/Library/Caches/ccache" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
+          echo "USE_CCACHE=1" >> $GITHUB_ENV
+
+      - name: Cache ccache compiler cache
+        id: cache-ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ccache
+          # Unique key per run so each successful run saves an updated cache;
+          # restore-keys pulls the most recent prior cache to warm-start.
+          key: ${{ runner.os }}-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
+
       - name: Cache Expo prebuild output
         id: cache-expo-prebuild
         uses: actions/cache@v4
@@ -272,15 +294,6 @@ jobs:
           echo "Scheme: ${{ steps.xcode-config.outputs.scheme }}"
           echo "Build target: ${{ steps.xcode-config.outputs.build_target }}"
 
-      - name: Cache Xcode derived data
-        id: cache-xcode-derived
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Developer/Xcode/DerivedData
-          key: ${{ runner.os }}-xcode-derived-${{ hashFiles('ios/Podfile.lock', 'package.json', 'app.json') }}
-          restore-keys: |
-            ${{ runner.os }}-xcode-derived-
-
       - name: Build and archive iOS app (unsigned)
         working-directory: ios
         run: |
@@ -294,6 +307,8 @@ jobs:
             -archivePath "$ARCHIVE_PATH" \
             -destination 'generic/platform=iOS' \
             -derivedDataPath ~/Library/Developer/Xcode/DerivedData \
+            -skipPackagePluginValidation \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
@@ -302,6 +317,9 @@ jobs:
           echo "Archive created at: $ARCHIVE_PATH"
           echo "archive_path=$ARCHIVE_PATH" >> "$GITHUB_ENV"
           echo "XCODE_DURATION=$(($(date +%s) - XCODE_START))" >> $GITHUB_ENV
+
+          # ccache hit/miss stats — confirms cache is engaging on later runs.
+          ccache -s 2>/dev/null || true
 
       - name: Debug - Verify archive structure
         run: |
@@ -379,7 +397,7 @@ jobs:
           echo "| node_modules | ${{ steps.cache-node-modules.outputs.cache-hit == 'true' && '✅ Hit' || '❌ Miss' }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Expo prebuild | ${{ steps.cache-expo-prebuild.outputs.cache-hit == 'true' && '✅ Hit' || '❌ Miss' }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| CocoaPods specs | ${{ steps.cache-cocoapods-specs.outputs.cache-hit == 'true' && '✅ Hit' || '❌ Miss' }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Xcode derived data | ${{ steps.cache-xcode-derived.outputs.cache-hit == 'true' && '✅ Hit' || '❌ Miss' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ccache | ${{ steps.cache-ccache.outputs.cache-hit == 'true' && '✅ Hit' || '❌ Miss' }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Artifact Details" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Name:** tripX-unsigned-ipa-${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
